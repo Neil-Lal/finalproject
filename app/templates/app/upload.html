@@ -1,0 +1,66 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+<!-- Don't show upload form if user does not have permission to upload -->
+{% if permission %}
+<div class="row">
+    <div class="col-md-8">
+        <section id="uploadForm">
+            <!--<form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <input type="file" name="myfile">
+                <button type="submit">Upload</button>
+            </form>-->
+
+            <form action="{% url 'upload' %}" method="post" class="form-horizontal" enctype="multipart/form-data">
+                {% csrf_token %}
+                <h4>Upload data to selected report</h4>
+                <hr />
+                <div class="form-group">
+                    <label for="report_name" class="col-md-2 control-label">Report name</label>
+                    <div class="col-md-10">
+                        <select name="report_name" required>
+                            <option value="" selected disabled>----</option>
+                            {% for report in reports %}
+                                <option value="{{ report.name }}">{{ report.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="myfile" class="col-md-2 control-label">Select File</label>
+                    <div class="col-md-10">
+                        <input id="myfile" name="myfile" required type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="col-md-offset-2 col-md-10">
+                        <input type="submit" value="Submit" class="btn btn-default" />
+                    </div>
+                </div>
+                {% if form.errors %}
+                <p class="validation-summary-errors">There were errors uploading the file.</p>
+                {% endif %}
+            </form>
+        </section>
+    </div>
+</div>
+{% else %}
+    <ul class="messages">
+        <li>
+            Do not have uploader permissions.
+        </li>
+    </ul>
+{% endif %}
+{% endblock %}
+
+
+{% block scripts %}
+
+{% load staticfiles %}
+<script src="{% static 'app/scripts/jquery.validate.min.js' %}"></script>
+
+{% endblock %}

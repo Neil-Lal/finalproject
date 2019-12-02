@@ -1,0 +1,15 @@
+﻿provider,location,charges,payments,adjustments
+Dr. Bob,Cardiology,33882,5218,11375
+Dr. Feelbetter,Cardiology,18993,20255,5359
+Dr. Jones,Cardiology,34126,6283,2537
+Dr. Kathy,Cardiology,4071,5133,29910
+Dr. Semer,Cardiology,14257,9912,11832
+Dr. Semer,Pulmonology,1051,11955,23558
+PA Smith,Pulmonology,15509,19598,34947
+Dr. Lal,Primary Care,29515,1041,4249
+Dr. Jones,Primary Care,19949,26883,18781
+Dr. Kathy,Primary Care,32875,24093,10318
+Dr. Cares,Primary Care,28772,15103,18425
+Dr. Help,Urgent Care,77,25077,15141
+Dr. Semer,Urgent Care,17837,27161,21417
+PA Kim,Urgent Care,32525,30095,20044
