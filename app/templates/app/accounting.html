@@ -1,0 +1,23 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+<!-- Only show page with proper permissions -->
+{% if accounting %}
+    <div class="row">
+        <div class="col-md-8">
+            Here
+            {{ accoutning_JE }}
+        </div>
+    </div>
+{% else %}
+    <ul class="messages">
+        <li>
+            Do not have accounting permissions.
+        </li>
+    </ul>
+{% endif %}
+
+{% endblock %}

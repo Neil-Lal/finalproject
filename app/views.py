@@ -16,7 +16,7 @@ from datetime import datetime
 import pandas as pd
 import os.path
 
-from .models import Reports, ExecutiveSummaryData
+from .models import Reports, ExecutiveSummaryData, accountingJE_GLMapping
 from .forms import ContactForm
 
 
@@ -25,17 +25,61 @@ def home(request):
     context = {
         'title':'Upload data',
     }
+
+    # View for logged in users
     if request.user.is_authenticated:
         user = get_object_or_404(User, pk=request.user.id)
-        context['permission'] = user.has_perm('app.can_view')
 
+        # Add permission settings to context so they only see their allowed sections
+        context['permissions'] = user.has_perm('app.can_view')
+        context['accounting'] = user.has_perm('accounting_view')
+
+        # Get data for accounting report
+        ## Monthly JE report
+        data_accounting_JE_latest_date = ExecutiveSummaryData.objects.latest('date_ran').date_ran.strftime('%Y-%m-%d')
+        data_accounting_JE = ExecutiveSummaryData.objects.filter(date_ran = data_accounting_JE_latest_date)
+        context['accoutning_JE'] = data_accounting_JE
 
     return render(
         request,
         'app/index.html',
-        {
-            'title':'Home Page',
-        }
+        context
+    )
+
+
+def accounting(request):
+    """Renders the accounting department page."""
+    context = {
+        'title':'Accounting monthly Reports',
+    }
+
+    # View for logged in users
+    if request.user.is_authenticated:
+        user = get_object_or_404(User, pk=request.user.id)
+
+        # Verify correct permissions for accounting
+        if user.has_perm('accounting_view'):
+            context['accounting'] = user.has_perm('accounting_view')
+
+            # Get data for monthly Journal Entry (JE) report
+            data_accounting_JE_latest_date = ExecutiveSummaryData.objects.latest('date_ran').date_ran
+            data_accounting_JE = ExecutiveSummaryData.pdobjects.filter(date_ran = data_accounting_JE_latest_date).to_dataframe()
+           
+            #### Check out url for table
+            #### https://stackoverflow.com/questions/39003732/display-django-pandas-dataframe-in-a-django-template
+           
+            # Attach to Context
+            context['accoutning_JE'] = data_accounting_JE
+
+        else:
+            # No accounting permissions.  Return error message.
+            messages.error(request, 'Do not have accounting permissions')
+            return HttpResponseRedirect(reverse(''))
+
+    return render(
+        request,
+        'app/accounting.html',
+        context
     )
 
 

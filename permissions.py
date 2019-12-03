@@ -4,6 +4,9 @@ from app.models import Reports, ExecutiveSummaryData
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 
+# Run this command with new permission uncommented
+# python manage.py shell < permissions.py
+
 #content_type = ContentType.objects.get_for_model(Reports)
 #permission = Permission.objects.create(
 #    codename='can_view',
@@ -25,3 +28,9 @@ from django.contrib.contenttypes.models import ContentType
 #    content_type=content_type3,
 #)
 
+#content_type4 = ContentType.objects.get_for_model(Reports)
+#permission = Permission.objects.create(
+#    codename='accounting_view',
+#    name='Allows access to accounting reports',
+#    content_type=content_type4,
+#)
