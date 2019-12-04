@@ -3,7 +3,7 @@ Definition of views.
 """
 
 from django.shortcuts import render, get_object_or_404
-from django.http import HttpRequest, HttpResponseRedirect
+from django.http import HttpRequest, HttpResponseRedirect, HttpResponse
 from django.core.mail import send_mail, BadHeaderError
 from django.contrib.auth.models import User
 from django.db.models import Sum, Max
@@ -12,6 +12,7 @@ from django.contrib import messages
 from django.urls import reverse
 from sqlalchemy import create_engine
 from datetime import datetime
+from io import BytesIO
 
 import pandas as pd
 import os.path
@@ -23,7 +24,7 @@ from .forms import ContactForm
 def home(request):
     """Renders the home page."""
     context = {
-        'title':'Upload data',
+        'title': 'Upload data',
     }
 
     # View for logged in users
@@ -31,15 +32,24 @@ def home(request):
         user = get_object_or_404(User, pk=request.user.id)
 
         # Add permission settings to context so they only see their allowed sections
+        # Add button to go to accounting page.  Show last upload date so they can seee if upload date = current month so they know new report is ready
+            #data_accounting_JE_latest_date = ExecutiveSummaryData.objects \
+            #                                             .latest('date_ran') \
+            #                                             .date_ran
         context['permissions'] = user.has_perm('app.can_view')
         context['accounting'] = user.has_perm('accounting_view')
 
-        # Get data for accounting report
-        ## Monthly JE report
-        data_accounting_JE_latest_date = ExecutiveSummaryData.objects.latest('date_ran').date_ran.strftime('%Y-%m-%d')
-        data_accounting_JE = ExecutiveSummaryData.objects.filter(date_ran = data_accounting_JE_latest_date)
-        context['accoutning_JE'] = data_accounting_JE
 
+        # Get last upload dates for reports that expands and contracts with table
+        upload_dates = {}
+        report_list = Reports.objects.all().values('name').annotate(max_date=Max('report_name__date_ran'))
+         # <QuerySet [{'name': 'Executive Summary', 'report_name__date_ran': datetime.date(2019, 11, 30), 'max_date': datetime.date(2019, 11, 30)}]>
+        upload_dates[name] = last_upload_date
+
+        # Add to context
+        context['upload_dates'] = upload_dates
+    
+    # Render page with context
     return render(
         request,
         'app/index.html',
@@ -47,10 +57,84 @@ def home(request):
     )
 
 
+def process_accounting_JE(type='debits'):
+    """Get Executive summary data and process into JE report format"""
+
+    # Default value for type incase weird value somehow gets passed to type
+    type = type if type in ['debits', 'charges'] else 'debits'
+
+    def add_gl(row):
+        """Helper function for  mapping GL #s to locations"""
+        gl = accountingJE_GLMapping.objects.all()
+        loc = row['location']
+        gl_value = gl.filter(location=loc).values('GL')[0]['GL']
+        return gl_value
+
+    # Get data for latest monthly Journal Entry (JE) report
+    data_accounting_JE_latest_date = ExecutiveSummaryData.objects \
+                                                         .latest('date_ran') \
+                                                         .date_ran
+    data_accounting_JE = ExecutiveSummaryData.pdobjects \
+                                             .filter(date_ran=data_accounting_JE_latest_date) \
+                                             .to_dataframe()
+
+    # Remove unecessary columns
+    if type == 'debits':
+        data_accounting_JE = data_accounting_JE.drop(['id', 'date_ran', 'provider', 'name', 'charges'], axis=1)
+
+        # Group and sums
+        data_accounting_JE = data_accounting_JE.groupby(['location'], as_index=False) \
+                                               .agg({'payments': 'sum', 'adjustments': 'sum'})
+    if type == 'charges':
+        data_accounting_JE = data_accounting_JE.drop(['id', 'date_ran', 'provider', 'name', 'payments', 'adjustments'], axis=1)
+        # Group and sums
+        data_accounting_JE = data_accounting_JE.groupby(['location'], as_index=False) \
+                                           .agg({'charges': 'sum'})
+    
+    # Add columns
+    # GL Mapping from database
+    data_accounting_JE['gl_account'] = data_accounting_JE.apply(lambda row: add_gl(row), axis=1)
+
+    # Add Journal number with max ID
+    data_accounting_JE['journal_no'] = 'JE' + str(ExecutiveSummaryData.objects.all().order_by("-id")[0].id)
+
+    # Change location to comment with location name
+    data_accounting_JE['posting_comment'] = data_accounting_JE.apply(lambda row: 'REVENUE - ' + str(row['location']), axis=1)
+    data_accounting_JE = data_accounting_JE.drop(['location'], axis=1)
+
+    # Static columns
+    data_accounting_JE['post_date'] = datetime.today().strftime('%Y-%m-%d')
+    data_accounting_JE['source_journal'] = 'JE'
+    data_accounting_JE['source_module'] = 'GL'
+
+    if type == 'debits':
+        # Reorder columns into correct upload order
+        data_accounting_JE = data_accounting_JE[['gl_account', 'post_date', 'source_journal',
+                                                 'journal_no', 'source_module', 'payments',
+                                                 'adjustments', 'posting_comment']]
+
+        # Rename Columns
+        data_accounting_JE.columns = ['GL Account', 'Posting Date', 'Source Journal',
+                                                 'Journal Number', 'Source Module', 'Debits',
+                                                 'Credits', 'Posting Comment']
+    if type == 'charges':
+        # Reorder columns into correct upload order
+        data_accounting_JE = data_accounting_JE[['gl_account', 'post_date', 'source_journal',
+                                                 'journal_no', 'source_module', 'charges',
+                                                 'posting_comment']]
+
+        # Rename Columns
+        data_accounting_JE.columns = ['GL Account', 'Posting Date', 'Source Journal',
+                                                 'Journal Number', 'Source Module',
+                                                 'Charges', 'Posting Comment']
+
+    return data_accounting_JE
+
+
 def accounting(request):
     """Renders the accounting department page."""
     context = {
-        'title':'Accounting monthly Reports',
+        'title': 'Accounting Monthly Reports',
     }
 
     # View for logged in users
@@ -61,26 +145,36 @@ def accounting(request):
         if user.has_perm('accounting_view'):
             context['accounting'] = user.has_perm('accounting_view')
 
-            # Get data for monthly Journal Entry (JE) report
-            data_accounting_JE_latest_date = ExecutiveSummaryData.objects.latest('date_ran').date_ran
-            data_accounting_JE = ExecutiveSummaryData.pdobjects.filter(date_ran = data_accounting_JE_latest_date).to_dataframe()
-           
-            #### Check out url for table
-            #### https://stackoverflow.com/questions/39003732/display-django-pandas-dataframe-in-a-django-template
-           
-            # Attach to Context
-            context['accoutning_JE'] = data_accounting_JE
+            # Process data into reports
+            data_debitsandcredits = process_accounting_JE()
+            data_charges = process_accounting_JE('charges')
 
+            # Attach to Context
+            context['accoutning_JE_debitsandcredits'] = data_debitsandcredits.to_html(index=False)
+            context['accoutning_JE_charges'] = data_charges.to_html(index=False)
         else:
             # No accounting permissions.  Return error message.
             messages.error(request, 'Do not have accounting permissions')
             return HttpResponseRedirect(reverse(''))
-
     return render(
         request,
         'app/accounting.html',
         context
     )
+
+
+def download_accounting_JE(request, type='debits'):
+    """Download link for accouting journal entry XLSX file"""
+
+    data = process_accounting_JE(type)
+    with BytesIO() as b:
+        # Use the StringIO object as the filehandle.
+        writer = pd.ExcelWriter(b, engine='xlsxwriter')
+        data.to_excel(writer, sheet_name='Upload', index=False)
+        writer.save()
+        return HttpResponse(b.getvalue(),
+                            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
 
 
 def contact(request):
@@ -103,7 +197,11 @@ def contact(request):
 
             # Attempt to send the message via email to all superusers
             try:
-                send_mail(subject, message, from_email, [email.email for email in superusers_emails]) #superusers_emails
+                send_mail(subject,
+                          message,
+                          from_email,
+                          [email.email for email in superusers_emails]
+                          )
             except BadHeaderError:
                 messages.error(request, 'Issue sending email')
                 return HttpResponseRedirect(reverse('contact'))
@@ -127,82 +225,80 @@ def contact(request):
             request,
             'app/contact.html',
             {
-                'title':'Contact',
-                'message':'Let me know if you have any questions, comments, or concerns.',
+                'title': 'Contact',
+                'message': 'Let me know if you have any questions, comments, or concerns.',
                 'form': form,
             }
         )
 
-def about(request):
-    """Renders the about page."""
-    assert isinstance(request, HttpRequest)
-    return render(
-        request,
-        'app/about.html',
-        {
-            'title':'About',
-            'message':'Your application description page.',
-        }
-    )
 
 def simple_upload(request):
     """Allows users with Uploader permissions to upload data"""
     user = get_object_or_404(User, pk=request.user.id)
     context = {
-        'permission': user.has_perm('app.can_upload'),    
+        # Check if the user has uploader permissions
+        'permission': user.has_perm('app.can_upload'),
         'reports': Reports.objects.all(),
-        'title':'Upload data',
+        'title': 'Upload data',
     }
 
     # Arriving by POST
     if request.method == 'POST' and request.FILES['myfile']:
-        # Verify again that user is allowed to upload data
+
+        # Server side verification that user is allowed to upload data
         if not user.has_perm('app.can_upload'):
             messages.error(request, 'Need uploader permissions')
             return HttpResponseRedirect(reverse('upload'))
-        ### ADD A TRY STATEMENT WHEN DONE
 
-        # Get uploaded file and report name and required fields
-        myfile = request.FILES['myfile']
-        report_name = request.POST['report_name']
-        fk_name = Reports.objects.get(name=report_name).id
-        required_fields = Reports.objects.get(name=report_name).required_field
+        try:
+            # Get uploaded file and report name and required fields
+            myfile = request.FILES['myfile']
+            report_name = request.POST['report_name']
+            fk_name = Reports.objects.get(name=report_name).id
+            required_fields = Reports.objects.get(name=report_name).required_field
 
-        # Retrieve database settings
-        database_name = settings.DATABASES['default']['NAME']
-        database_url = 'sqlite:///{}'.format(os.path.abspath(database_name))
+            # Retrieve database settings
+            database_name = settings.DATABASES['default']['NAME']
+            database_url = 'sqlite:///{}'.format(os.path.abspath(database_name))
 
-        # Convert file to dataframe for bulk upload to database
-        if myfile.name.endswith('.csv'):
-            df = pd.read_csv(myfile, header=0, skip_blank_lines=True, 
-                    skipinitialspace=True)
-        elif myfile.name.endswith('.xls') or myfile.name.endswith('.xlsx'):
-            df = pd.read_excel(myfile)
-        else:
-            messages.error(request, 'Invalid file type uploaded')
-            return HttpResponseRedirect(reverse('upload'))
-
-        # Add date ran and foreign key values
-        today = datetime.today().strftime('%Y-%m-%d')
-        df['date_ran'] = today
-        df['name_id'] = fk_name
-
-        # Validate required fields
-        required_fields = [requ.strip() for requ in required_fields.split(',')]
-        for field in required_fields:
-            if field not in df.columns:
-                messages.error(request, 'Column: ' + str(field) + 
-                               ' is missing from file.  Please try again.')
+            # Convert file to dataframe for bulk upload to database
+            if myfile.name.endswith('.csv'):
+                df = pd.read_csv(myfile,
+                                 header=0,
+                                 skip_blank_lines=True,
+                                 skipinitialspace=True
+                                 )
+            elif myfile.name.endswith('.xls') or myfile.name.endswith('.xlsx'):
+                df = pd.read_excel(myfile)
+            else:
+                messages.error(request, 'Invalid file type uploaded')
                 return HttpResponseRedirect(reverse('upload'))
 
-        # Upload to django database
-        engine = create_engine(database_url, echo=False)
-        connection = engine.raw_connection()
-        df.to_sql('app_executivesummarydata', con=connection, index=False, if_exists='append')
-        
-        return render(request, 'app/upload.html', context)
+            # Add date ran and foreign key values
+            today = datetime.today().strftime('%Y-%m-%d')
+            df['date_ran'] = today
+            df['name_id'] = fk_name
 
+            # Validate required fields using database Reports table
+            required_fields = [requ.strip()
+                               for requ in required_fields.split(',')]
+            for field in required_fields:
+                if field not in df.columns:
+                    messages.error(request, 'Column: ' + str(field) +
+                                   ' is missing from file.  Please try again.')
+                    return HttpResponseRedirect(reverse('upload'))
+
+            # Upload to django database
+            engine = create_engine(database_url, echo=False)
+            connection = engine.raw_connection()
+            df.to_sql('app_executivesummarydata',
+                      con=connection,
+                      index=False,
+                      if_exists='append'
+                      )
+
+        # Issue encountered uploading
+        except Exception as e:
+            messages.error(request, 'Issue uploading file to server: ' + str(e))
+            return HttpResponseRedirect(reverse('upload'))
     return render(request, 'app/upload.html', context)
-
-    # Render list page with the documents and the form
-

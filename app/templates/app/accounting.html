@@ -6,12 +6,19 @@
 
 <!-- Only show page with proper permissions -->
 {% if accounting %}
-    <div class="row">
-        <div class="col-md-8">
-            Here
-            {{ accoutning_JE }}
-        </div>
-    </div>
+    <h3>Debits and Credits Journal Entry</h3>
+    <a href="{% url 'downloadJE' type='debits' %}" download>Download Journal Entry</a>
+    <br />
+    Data Preview: 
+    <br />
+    {{ accoutning_JE_debitsandcredits|safe }}
+    <br />
+    <h3>Charges Journal Entry</h3>
+    <a href="{% url 'downloadJE' type='charges' %}" download>Download Journal Entry</a>
+    <br />
+    Data Preview: 
+    <br />
+    {{ accoutning_JE_charges|safe }}
 {% else %}
     <ul class="messages">
         <li>
