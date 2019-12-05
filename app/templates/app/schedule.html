@@ -1,0 +1,19 @@
+{% extends "app/layout.html" %}
+
+{% block content %}
+
+<h2>{{ title }}</h2>
+
+<!-- Only show page with proper permissions -->
+{% if accounting %}
+    <h3>Schedule Report Runs</h3>
+
+{% else %}
+    <ul class="messages">
+        <li>
+            Do not have proper permissions
+        </li>
+    </ul>
+{% endif %}
+
+{% endblock %}

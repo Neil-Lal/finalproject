@@ -5,6 +5,20 @@
     margin-bottom: 15px;
 }
 
+.current {
+    background-color: greenyellow;
+}
+
+.not_current {
+    background-color: red;
+    font-weight: bold;
+}
+
+div .top-seperate {
+    border-top: 1px solid black;
+    padding-top: 15px;
+}
+
 .messages li .success {
     padding: 10px;
     background-color: lawngreen; /* Red */

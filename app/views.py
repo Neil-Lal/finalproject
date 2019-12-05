@@ -4,8 +4,8 @@ Definition of views.
 
 from django.shortcuts import render, get_object_or_404
 from django.http import HttpRequest, HttpResponseRedirect, HttpResponse
-from django.core.mail import send_mail, BadHeaderError
-from django.contrib.auth.models import User
+from django.core.mail import send_mail, BadHeaderError, EmailMessage
+from django.contrib.auth.models import User, Group
 from django.db.models import Sum, Max
 from django.conf import settings
 from django.contrib import messages
@@ -17,7 +17,7 @@ from io import BytesIO
 import pandas as pd
 import os.path
 
-from .models import Reports, ExecutiveSummaryData, accountingJE_GLMapping
+from .models import Reports, ExecutiveSummaryData, accountingJE_GLMapping, Announcements, ExportReports, Schedule
 from .forms import ContactForm
 
 
@@ -25,30 +25,34 @@ def home(request):
     """Renders the home page."""
     context = {
         'title': 'Upload data',
+        # Admin can enter announcements in admin panel - Shows TODAYS announcements
+        'announcements': Announcements.objects.filter(date=datetime.today())
     }
-
+    send_reports()  ##REMOVEEEEE
     # View for logged in users
     if request.user.is_authenticated:
         user = get_object_or_404(User, pk=request.user.id)
 
-        # Add permission settings to context so they only see their allowed sections
-        # Add button to go to accounting page.  Show last upload date so they can seee if upload date = current month so they know new report is ready
-            #data_accounting_JE_latest_date = ExecutiveSummaryData.objects \
-            #                                             .latest('date_ran') \
-            #                                             .date_ran
-        context['permissions'] = user.has_perm('app.can_view')
-        context['accounting'] = user.has_perm('accounting_view')
-
-
         # Get last upload dates for reports that expands and contracts with table
         upload_dates = {}
         report_list = Reports.objects.all().values('name').annotate(max_date=Max('report_name__date_ran'))
-         # <QuerySet [{'name': 'Executive Summary', 'report_name__date_ran': datetime.date(2019, 11, 30), 'max_date': datetime.date(2019, 11, 30)}]>
-        upload_dates[name] = last_upload_date
+        for report in report_list:
+            # Get latest date
+            date = report['max_date'].strftime('%m/%d/%Y')
 
-        # Add to context
+            # Check if date is in current month for formatting
+            if report['max_date'].strftime('%m') == datetime.today().strftime('%m'):
+                date_class = 'current'
+            else:
+                date_class = 'not_current'
+            vals = {'date': date, 'date_class': date_class}
+            upload_dates[report['name']] = vals
+
+        # Add to context - upload dates and permission settings
         context['upload_dates'] = upload_dates
-    
+        context['permissions'] = user.has_perm('app.can_view')
+        context['accounting'] = user.has_perm('accounting_view')
+
     # Render page with context
     return render(
         request,
@@ -57,11 +61,13 @@ def home(request):
     )
 
 
-def process_accounting_JE(type='debits'):
-    """Get Executive summary data and process into JE report format"""
+def process_accounting_JE(type='Debits and Credits Journal Entry'):
+    """Get Executive summary data and process into Journal Entry(JE) report format"""
 
     # Default value for type incase weird value somehow gets passed to type
-    type = type if type in ['debits', 'charges'] else 'debits'
+    qs = ExportReports.objects.all().values('name')
+    types = [qs[i]['name'] for i in range(len(qs))]
+    type = type if type in types else 'Debits and Credits Journal Entry'
 
     def add_gl(row):
         """Helper function for  mapping GL #s to locations"""
@@ -74,22 +80,25 @@ def process_accounting_JE(type='debits'):
     data_accounting_JE_latest_date = ExecutiveSummaryData.objects \
                                                          .latest('date_ran') \
                                                          .date_ran
+
+    # Create a pandas dataframe for data processing
     data_accounting_JE = ExecutiveSummaryData.pdobjects \
                                              .filter(date_ran=data_accounting_JE_latest_date) \
                                              .to_dataframe()
 
     # Remove unecessary columns
-    if type == 'debits':
+    if type == 'Debits and Credits Journal Entry':
         data_accounting_JE = data_accounting_JE.drop(['id', 'date_ran', 'provider', 'name', 'charges'], axis=1)
 
         # Group and sums
         data_accounting_JE = data_accounting_JE.groupby(['location'], as_index=False) \
                                                .agg({'payments': 'sum', 'adjustments': 'sum'})
-    if type == 'charges':
+    if type == 'Charges Journal Entry':
         data_accounting_JE = data_accounting_JE.drop(['id', 'date_ran', 'provider', 'name', 'payments', 'adjustments'], axis=1)
+
         # Group and sums
         data_accounting_JE = data_accounting_JE.groupby(['location'], as_index=False) \
-                                           .agg({'charges': 'sum'})
+                                               .agg({'charges': 'sum'})
     
     # Add columns
     # GL Mapping from database
@@ -107,7 +116,7 @@ def process_accounting_JE(type='debits'):
     data_accounting_JE['source_journal'] = 'JE'
     data_accounting_JE['source_module'] = 'GL'
 
-    if type == 'debits':
+    if type == 'Debits and Credits Journal Entry':
         # Reorder columns into correct upload order
         data_accounting_JE = data_accounting_JE[['gl_account', 'post_date', 'source_journal',
                                                  'journal_no', 'source_module', 'payments',
@@ -117,7 +126,7 @@ def process_accounting_JE(type='debits'):
         data_accounting_JE.columns = ['GL Account', 'Posting Date', 'Source Journal',
                                                  'Journal Number', 'Source Module', 'Debits',
                                                  'Credits', 'Posting Comment']
-    if type == 'charges':
+    if type == 'Charges Journal Entry':
         # Reorder columns into correct upload order
         data_accounting_JE = data_accounting_JE[['gl_account', 'post_date', 'source_journal',
                                                  'journal_no', 'source_module', 'charges',
@@ -301,4 +310,120 @@ def simple_upload(request):
         except Exception as e:
             messages.error(request, 'Issue uploading file to server: ' + str(e))
             return HttpResponseRedirect(reverse('upload'))
+        
+        # Upload complete - Send report to scheduled users
+        send_reports()
+
     return render(request, 'app/upload.html', context)
+
+
+def send_reports():
+    """After upload is complete, look at Schedule table and send designated reports to designated groups"""
+
+    # Get all reports to send out automatically
+    sched = Schedule.objects.all()
+    perm_group_pk = sched.values('permission_group')
+
+    # Iter over each scheduled report
+    for i in range(len(perm_group_pk)):
+
+        # Retrieve all users in permission group to send report to
+        pks = perm_group_pk[i]['permission_group']
+        perm_group = Group.objects.filter(pk=pks).values('name')
+        users = User.objects.filter(groups__name=perm_group[0]['name'])
+
+        # Build email fields
+        subject = sched[0].name
+        message = 'See Attached'
+        from_email = 'noreply@gmail.com'
+        to_list = [users.values('email')[email]['email'] for email in range(len(users.values('email')))]
+
+        # Build report
+        export_pk = sched.values('report_id')[i]['report_id']
+        export_name = ExportReports.objects.get(pk=export_pk).name
+        report = process_accounting_JE(export_name)
+
+        # Write report to excel
+        with BytesIO() as b:
+            # Use the StringIO object as the filehandle.
+            writer = pd.ExcelWriter(b, engine='xlsxwriter')
+            report.to_excel(writer, sheet_name='Upload', index=False)
+            writer.save()
+
+            # Attempt to email report
+            try:
+                email = EmailMessage(
+                    subject = subject,
+                    body = message,
+                    from_email = from_email,
+                    to = to_list,
+                )
+                email.attach(subject + '.xlsx',
+                             b.getvalue(),
+                             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                             )
+            except BadHeaderError:
+                messages.error(request, 'Issue sending email')
+                return HttpResponseRedirect(reverse('contact'))
+    # b.getvalue()
+
+
+    """ EMAIL STUFF
+            # Attempt to send the message via email to all superusers
+            try:
+                send_mail(subject,
+                          message,
+                          from_email,
+                          [email.email for email in superusers_emails]
+                          )
+            except BadHeaderError:
+                messages.error(request, 'Issue sending email')
+                return HttpResponseRedirect(reverse('contact'))
+
+            # Return sucesss
+            messages.success(request, 'Email sent sucessfully, we will respond shortly.')
+            return HttpResponseRedirect(reverse('contact'))
+    """
+
+
+def add_to_schedule(request):
+    """Logic for adding Group to the schedule, if permissable"""
+    pass
+
+
+def schedule(request):
+    """Allows user to schedule email delivery of reports"""
+    context = {
+        'title': 'Schedule monthly report run',
+    }
+
+    # Get today's day
+    today = datetime.today().strftime('%d')
+
+    # Serverside verification that user is logged in
+    if request.user.is_authenticated:
+        user = get_object_or_404(User, pk=request.user.id)
+
+        # Verify correct permissions for accounting
+        if user.has_perm('accounting_view'):
+            context['accounting'] = user.has_perm('accounting_view')
+
+            # View users scheduled reports
+
+            # Handle deleting schedule report
+
+            # Email report to user on UPLOAD of data
+
+        else:
+            # No accounting permissions - can't schedule their reports
+            messages.error(request, 'No Accounting permissions - Cannot schedule their reports')
+            return HttpResponseRedirect(reverse(''))
+    else:
+        # Not logged in
+        messages.error(request, 'Not logged in')
+        return HttpResponseRedirect(reverse('login'))
+    return render(
+        request,
+        'app/schedule.html',
+        context
+    )

@@ -10,22 +10,28 @@
 {% if permissions %}
 <div class="row">
     <div class="col-md-4">
-        <h2>Getting started</h2>
+        <h2>Reports - Last upload date</h2>
         <ul>
-            {% for key, value in upload_dates %}
-                <li>{{ key }} : {{ value }}</li>
+            {% for key, value in upload_dates.items %}
+                <li class="{{ value.date_class }}">{{ key }} : {{ value.date }}</li>
             {% endfor %}
         </ul>  
     </div>
     <div class="col-md-4">
-        <h2>Get more libraries</h2>
-        <p>The Python Package Index is a repository of software for the Python programming language.</p>
-        <p><a class="btn btn-default" href="https://pypi.org/">Learn more &raquo;</a></p>
     </div>
     <div class="col-md-4">
-        <h2>Microsoft Azure</h2>
-        <p>You can easily publish to Microsoft Azure using Visual Studio. Find out how you can host your application using a free trial today.</p>
-        <p><a class="btn btn-default" href="http://azure.microsoft.com">Learn more &raquo;</a></p>
+        <h2>Announcements</h2>
+        <p>These are sample announcements</p>
+        <ul>
+            {% for announcement in announcements %}
+                <li>{{ announcement }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+<div class="row top-seperate">
+    <div class="col-md-12">
+        chart
     </div>
 </div>
 {% else %}
